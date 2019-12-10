@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Setup AWS workstream-specific resources for CI/CD
+Parameters:
+  ProjectName:
+    Description: aws-codecommit-pull-request-aws-codebuild-master
+    Type: String
+  Image:
+    Description: The Image you wish to use for CodeBuild.
+    Type: String
+    AllowedValues:
+    - aws/codebuild/ubuntu-base:14.04
+    - aws/codebuild/android-java-8:26.1.1
+    - aws/codebuild/android-java-8:24.4.1
+    - aws/codebuild/docker:17.09.0
+    - aws/codebuild/golang:1.10
+    - aws/codebuild/java:openjdk-8
+    - aws/codebuild/java:openjdk-9
+    - aws/codebuild/nodejs:10.1.0
+    - aws/codebuild/nodejs:8.11.0
+    - aws/codebuild/nodejs:6.3.1
+    - aws/codebuild/php:5.6
+    - aws/codebuild/php:7.0
+    - aws/codebuild/python:3.6.5
+    - aws/codebuild/python:3.5.2
+    - aws/codebuild/python:3.4.5
+    - aws/codebuild/python:3.3.6
+    - aws/codebuild/python:2.7.12
+    - aws/codebuild/ruby:2.5.1
+    - aws/codebuild/ruby:2.3.1
+    - aws/codebuild/ruby:2.2.5
+    - aws/codebuild/dot-net:core-1
+    - aws/codebuild/dot-net:core-2.0
+    - aws/codebuild/windows-base:1.0
+  ComputeType:
+    Description: The Compute Type to use for AWS CodeBuild
+    Type: String
+    AllowedValues:
+    - BUILD_GENERAL1_SMALL
+    - BUILD_GENERAL1_MEDIUM
+    - BUILD_GENERAL1_LARGE
+  NotificationEndpoint:
+    Description: The Email address which you would like to send updates to about this
+      Pipeline.
+    Type: String
+Resources:
+  PipelineBucket:
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+  PipelineSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+      - Endpoint:
+          Ref: NotificationEndpoint
+        Protocol: email
+  PipelineSNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id:
+          Fn::Sub: ${AWS::StackName}
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+            - codecommit.amazonaws.com
+          Action: sns:Publish
+          Resource: '*'
+      Topics:
+      - Ref: PipelineSNSTopic
+  PipelineEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Trigger notifications based on pipeline state changes
+      EventPattern:
+        source:
+        - aws.codepipeline
+        detail-type:
+        - CodePipeline Pipeline Execution State Change
+        detail:
+          state:
+          - FAILED
+          - STARTED
+          - SUCCEEDED
+          pipeline:
+          - Ref: CodePipeline
+      State: ENABLED
+      Targets:
+      - Arn:
+          Ref: PipelineSNSTopic
+        Id:
+          Fn::Sub: ${AWS::StackName}
+        InputTransformer:
+          InputTemplate: '"The pipeline <pipeline> from account <account> has <state>
+            at <at>."'
+          InputPathsMap:
+            pipeline: $.detail.pipeline
+            state: $.detail.state
+            at: $.time
+            account: $.account
+  PipelinePREventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Trigger notifications based on CodeCommit PullRequests
+      EventPattern:
+        source:
+        - aws.codecommit
+        detail-type:
+        - CodeCommit Pull Request State Change
+        resources:
+        - Fn::GetAtt:
+          - CodeCommitRepository
+          - Arn
+        detail:
+          event:
+          - pullRequestSourceBranchUpdated
+          - pullRequestCreated
+      State: ENABLED
+      Targets:
+      - Arn:
+          Fn::ImportValue: PullRequestFunctionJRCMArn
+        Id:
+          Fn::Sub: ${AWS::StackName}-pr
+      - Arn:
+          Fn::GetAtt:
+          - CodeBuildProjectPR
+          - Arn
+        RoleArn:
+          Fn::ImportValue: CloudWatchEventsRoleJRCMArn
+        Id:
+          Fn::Sub: ${AWS::StackName}-pr1
+        InputTransformer:
+          InputTemplate: "{ \n  \"sourceVersion\": <sourceVersion>, \n  \"artifactsOverride\"\
+            : {\"type\": \"NO_ARTIFACTS\"}, \n  \"environmentVariablesOverride\":\
+            \ [ \n     { \n         \"name\": \"pullRequestId\", \n         \"value\"\
+            : <pullRequestId>, \n         \"type\": \"PLAINTEXT\" \n     }, \n   \
+            \  { \n         \"name\": \"repositoryName\", \n         \"value\": <repositoryName>,\
+            \ \n         \"type\": \"PLAINTEXT\" \n     }, \n     { \n         \"\
+            name\": \"sourceCommit\", \n         \"value\": <sourceCommit>, \n   \
+            \      \"type\": \"PLAINTEXT\" \n     }, \n     { \n         \"name\"\
+            : \"destinationCommit\", \n         \"value\": <destinationCommit>, \n\
+            \         \"type\": \"PLAINTEXT\" \n     } \n  ] \n} \n"
+          InputPathsMap:
+            sourceVersion: $.detail.sourceCommit
+            pullRequestId: $.detail.pullRequestId
+            repositoryName: $.detail.repositoryNames[0]
+            sourceCommit: $.detail.sourceCommit
+            destinationCommit: $.detail.destinationCommit
+  PipelineCCEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Triggers when builds fail/pass in CodeBuild
+      EventPattern:
+        source:
+        - aws.codebuild
+        detail-type:
+        - CodeBuild Build State Change
+        detail:
+          build-status:
+          - FAILED
+          - SUCCEEDED
+          project-name:
+          - Fn::Sub: ${ProjectName}-pr
+      State: ENABLED
+      Targets:
+      - Arn:
+          Fn::ImportValue: CodeBuildResultFuctionArn
+        Id:
+          Fn::Sub: ${AWS::StackName}-cc
+  PermissionForEventsToInvokeLambdaPR:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::ImportValue: PullRequestFunctionJRCMName
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - PipelinePREventRule
+        - Arn
+  PermissionForEventsToInvokeLambdaCC:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::ImportValue: CodeBuildResultFuctionName
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - PipelineCCEventRule
+        - Arn
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName:
+        Ref: ProjectName
+      RepositoryDescription:
+        Fn::Sub: CodeCommit Repo for ${ProjectName}
+      Triggers:
+      - Name: Email
+        DestinationArn:
+          Ref: PipelineSNSTopic
+        Branches:
+        - master
+        Events:
+        - all
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType:
+          Ref: ComputeType
+        Image:
+          Ref: Image
+        Type: LINUX_CONTAINER
+      Name:
+        Fn::Sub: ${ProjectName}
+      ServiceRole:
+        Fn::ImportValue: CodeBuildRoleJRCMArn
+      Source:
+        Type: CODEPIPELINE
+  CodeBuildProjectPR:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType:
+          Ref: ComputeType
+        Image:
+          Ref: Image
+        Type: LINUX_CONTAINER
+      Name:
+        Fn::Sub: ${ProjectName}-pr
+      ServiceRole:
+        Fn::ImportValue: CodeBuildRoleJRCMArn
+      Source:
+        Type: CODECOMMIT
+        Location:
+          Fn::GetAtt:
+          - CodeCommitRepository
+          - CloneUrlHttp
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: PipelineBucket
+      RoleArn:
+        Fn::ImportValue: CodePipelineRoleJRCMArn
+      Name:
+        Ref: ProjectName
+      Stages:
+      - Name: CodeCommit
+        Actions:
+        - Name: TemplateSource
+          ActionTypeId:
+            Category: Source
+            Owner: AWS
+            Version: 1
+            Provider: CodeCommit
+          OutputArtifacts:
+          - Name: TemplateSource
+          Configuration:
+            BranchName: master
+            RepositoryName:
+              Ref: ProjectName
+          RunOrder: 1
+      - Name: Build
+        Actions:
+        - Name: Validation
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Version: 1
+            Provider: CodeBuild
+          OutputArtifacts:
+          - Name:
+              Fn::Sub: ${ProjectName}-Build
+          InputArtifacts:
+          - Name: TemplateSource
+          Configuration:
+            ProjectName:
+              Ref: CodeBuildProject
+          RunOrder: 1
+      - Name: Deploy-Testing
+        Actions:
+        - Name: ReplaceChangeSet
+          InputArtifacts:
+          - Name: TemplateSource
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          Configuration:
+            ActionMode: CHANGE_SET_REPLACE
+            StackName:
+              Fn::Sub: testing-${ProjectName}
+            ChangeSetName:
+              Fn::Sub: testing-${ProjectName}
+            TemplatePath: TemplateSource::template.yaml
+            Capabilities: CAPABILITY_NAMED_IAM
+            RoleArn:
+              Fn::ImportValue: CloudFormationRoleJRCMArn
+          RunOrder: 1
+        - Name: ExecuteChangeSet
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          Configuration:
+            ActionMode: CHANGE_SET_EXECUTE
+            StackName:
+              Fn::Sub: testing-${ProjectName}
+            ChangeSetName:
+              Fn::Sub: testing-${ProjectName}
+          RunOrder: 2
+      - Name: Deploy-Production
+        Actions:
+        - Name: ReplaceChangeSet
+          InputArtifacts:
+          - Name: TemplateSource
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          Configuration:
+            ActionMode: CHANGE_SET_REPLACE
+            StackName:
+              Fn::Sub: production-${ProjectName}
+            ChangeSetName:
+              Fn::Sub: production-${ProjectName}
+            TemplatePath: TemplateSource::template.yaml
+            Capabilities: CAPABILITY_NAMED_IAM
+            RoleArn:
+              Fn::ImportValue: CloudFormationRoleJRCMArn
+          RunOrder: 1
+        - Name: ExecuteChangeSet
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          Configuration:
+            ActionMode: CHANGE_SET_EXECUTE
+            StackName:
+              Fn::Sub: production-${ProjectName}
+            ChangeSetName:
+              Fn::Sub: production-${ProjectName}
+          RunOrder: 2

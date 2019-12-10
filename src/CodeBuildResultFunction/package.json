@@ -1,0 +1,14 @@
+{
+  "name": "codebuildresultfunction",
+  "version": "1.0.0",
+  "description": "Code build result function",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "TIMP CLOUD",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.584.0"
+  }
+}

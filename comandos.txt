@@ -1,0 +1,13 @@
+Para base.yaml
+sam build --template base.yaml --build-dir .aws-sam-base/build
+
+sam package --template-file .aws-sam-base/build/template.yaml --output-template-file .aws-sam-base/build/packaged-template.yaml --s3-bucket codebuild-2019-bucket
+
+sam deploy --template-file .aws-sam-base/build/packaged-template.yaml --stack-name base-45 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+
+Para pipeline.yaml
+sam build --template pipeline.yaml --build-dir .aws-sam-pipeline/build
+
+sam package --template-file .aws-sam-pipeline/build/template.yaml --output-template-file .aws-sam-pipeline/build/packaged-template.yaml --s3-bucket codebuild-2019-bucket
+
+sam deploy --template-file .aws-sam-pipeline/build/packaged-template.yaml --stack-name pipeline-45 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM

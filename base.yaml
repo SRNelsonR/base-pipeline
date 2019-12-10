@@ -1,0 +1,236 @@
+# # Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved. 
+# # SPDX-License-Identifier: MIT-0 
+# --- 
+AWSTemplateFormatVersion: '2010-09-09'
+Transform:
+  - AWS::Serverless-2016-10-31
+Description:  CI/CD 
+Resources: 
+  CodePipelineRoleJRCM:
+    Type: "AWS::IAM::Role" 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          - Effect: "Allow" 
+            Principal: 
+              Service: 
+                - "codepipeline.amazonaws.com" 
+            Action: 
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/AmazonKinesisFullAccess
+      - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+      - arn:aws:iam::aws:policy/AWSXrayFullAccess
+      - arn:aws:iam::aws:policy/AmazonS3FullAccess 
+      Policies: 
+        - PolicyName: !Sub "${AWS::StackName}-AWS-CodePipeline-Service-Policy" 
+          PolicyDocument: 
+            Version: "2012-10-17" 
+            Statement: 
+              - Effect: "Allow" 
+                Action: 
+                  - "codedeploy:*" 
+                  - "s3:*" 
+                  - "iam:PassRole" 
+                  - "codebuild:*" 
+                  - "codecommit:*" 
+                  - "cloudformation:*" 
+                Resource: "*" 
+  CloudFormationRoleJRCM: 
+    Type: AWS::IAM::Role 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          Effect: Allow 
+          Principal: 
+            Service: cloudformation.amazonaws.com 
+          Action: sts:AssumeRole 
+      Policies: 
+        - PolicyName: !Sub "${AWS::StackName}-AWS-CloudFormation-Service-Policy" 
+          PolicyDocument: 
+            Version: "2012-10-17" 
+            Statement: 
+              - Effect: "Allow" 
+                Action: 
+                  - "sqs:*" 
+                  - "s3:*" 
+                  - "logs:*" 
+                  - "cloudwatch:*" 
+                  - "cognito-identity:*" 
+                  - "cognito-idp:*" 
+                  - "dynamodb:*" 
+                  - "events:*" 
+                  - "iam:*" 
+                  - "kinesis:*" 
+                  - "lambda:*" 
+                  - "elasticloadbalancing:*" 
+                  - "elasticloadbalancingv2:*" 
+                  - "sns:*" 
+                  - "tag:*" 
+                  - "kms:*" 
+                  - "ec2:*" 
+                  - "iot:*" 
+                  - "xray:*" 
+                  - "dax:*" 
+                  - "application-autoscaling:*" 
+                  - "datapipeline:*" 
+                  - "apigateway:*" 
+                  - "codepipeline:*" 
+                  - "codecommit:*" 
+                  - "codedeploy:*" 
+                  - "elasticbeanstalk:*" 
+                  - "opsworks:*" 
+                  - "cloudformation:*" 
+                  - "es:*" 
+                  - "autoscaling:*" 
+                Resource: "*" 
+  CodeBuildRoleJRCM: 
+    Type: AWS::IAM::Role 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          Effect: Allow 
+          Principal: 
+            Service: codebuild.amazonaws.com 
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/AmazonKinesisFullAccess
+      - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+      - arn:aws:iam::aws:policy/AWSXrayFullAccess
+      - arn:aws:iam::aws:policy/AmazonS3FullAccess 
+      - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+      Policies: 
+        - PolicyName: "AWS-CodeBuild-Service-Policy" 
+          PolicyDocument: 
+            Version: "2012-10-17" 
+            Statement: 
+              - Effect: "Allow" 
+                Action: 
+                  - "s3:Put*" 
+                  - "s3:Get*" 
+                  - "logs:*" 
+                  - "cloudformation:ValidateTemplate" 
+                  - "codecommit:*" 
+                Resource: "*" 
+  LambdaManagedPolicyJRCM: 
+      Type: "AWS::IAM::ManagedPolicy" 
+      Properties: 
+        Description: "Lambda Policy used for this stack" 
+        PolicyDocument: 
+          Version: "2012-10-17" 
+          Statement: 
+            - Effect: "Allow" 
+              Action: 
+                - "codebuild:*" 
+                - "codecommit:*" 
+                - "logs:CreateLogGroup" 
+                - "logs:CreateLogStream" 
+                - "logs:PutLogEvents" 
+                - "logs:GetLogEvents" 
+              Resource: "*" 
+  LambdaRoleJRCM: 
+    Type: "AWS::IAM::Role" 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          - Effect: "Allow" 
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com" 
+            Action: 
+              - "sts:AssumeRole" 
+      ManagedPolicyArns: 
+        - !Ref "LambdaManagedPolicyJRCM" 
+      RoleName: "lambda-roleJRCM" 
+  PullRequestFunctionJRCM: 
+    Type: "AWS::Serverless::Function" 
+    Properties:
+      Description: "Triggers CodeBuild on PR's in CodeCommit" 
+      CodeUri: ./src/PullRequestFunction/
+      Handler: index.lambdaHandler
+      Runtime: nodejs10.x 
+      MemorySize: 128 
+      Role: !GetAtt LambdaRoleJRCM.Arn 
+      Timeout: 10
+  CodeBuildResultFuction: 
+    Type: "AWS::Serverless::Function" 
+    Properties:
+      Description: "Triggers And updates CodeCommit with information from PR's" 
+      CodeUri: ./src/CodeBuildResultFunction/
+      Handler: index.lambdaHandler
+      Runtime: nodejs10.x 
+      MemorySize: 128 
+      Role: !GetAtt LambdaRoleJRCM.Arn  
+      Timeout: 10
+  CWEManagedPolicyJRCM: 
+    Type: "AWS::IAM::ManagedPolicy" 
+    Properties: 
+      Description: "CloudWatch Events Policy used for this stack" 
+      PolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          - Effect: "Allow" 
+            Action: 
+              - "codebuild:StartBuild" 
+            Resource: "*" 
+  CWERoleJRCM: 
+    Type: "AWS::IAM::Role" 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17" 
+        Statement: 
+          - Effect: "Allow" 
+            Principal: 
+              Service: 
+                - "events.amazonaws.com" 
+            Action: 
+              - "sts:AssumeRole" 
+      ManagedPolicyArns: 
+        - !Ref "CWEManagedPolicyJRCM" 
+Outputs: 
+  CodeBuildResultFuctionArn: 
+    Description: The ARN of the CodeCommit PR Building Function 
+    Value: !GetAtt CodeBuildResultFuction.Arn 
+    Export: 
+      Name: "CodeBuildResultFuctionArn" 
+  PullRequestFunctionJRCMArn: 
+    Description: The ARN of the CodeBuild Function 
+    Value: !GetAtt PullRequestFunctionJRCM.Arn 
+    Export: 
+      Name: "PullRequestFunctionJRCMArn" 
+  CodeBuildRoleJRCMArn: 
+    Description: 'The ARN of the CodeBuild Role' 
+    Value: !GetAtt CodeBuildRoleJRCM.Arn 
+    Export: 
+      Name: "CodeBuildRoleJRCMArn" 
+  CodePipelineRoleJRCMArn: 
+    Description: 'The ARN of the CodePipeline Role' 
+    Value: !GetAtt CodePipelineRoleJRCM.Arn 
+    Export: 
+      Name: "CodePipelineRoleJRCMArn" 
+  CloudFormationRoleJRCMArn: 
+    Description: 'The ARN of the Cloudformation Role' 
+    Value: !GetAtt CloudFormationRoleJRCM.Arn 
+    Export: 
+      Name: "CloudFormationRoleJRCMArn" 
+  CloudWatchEventsRoleJRCMArn: 
+    Description: 'The ARN of the Cloudformation Role' 
+    Value: !GetAtt CWERoleJRCM.Arn 
+    Export: 
+      Name: "CloudWatchEventsRoleJRCMArn"
+  CodeBuildResultFuctionName: 
+    Description: The name of the CodeCommit PR Building Function 
+    Value: !Ref CodeBuildResultFuction
+    Export: 
+      Name: "CodeBuildResultFuctionName"
+  PullRequestFunctionJRCMName: 
+    Description: The name of the CodeBuild Function 
+    Value: !Ref PullRequestFunctionJRCM 
+    Export: 
+      Name: "PullRequestFunctionJRCMName" 
